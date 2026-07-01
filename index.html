@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thai Wah Moves for Good Challenge</title>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Sarabun',sans-serif;background:#EEF4FF;min-height:100vh;}
+input,select,button,textarea{font-family:'Sarabun',sans-serif;}
+::placeholder{color:#9FB3D4;}
+@keyframes fadeUp{from{opacity:0;transform:translateY(20px);}to{opacity:1;transform:translateY(0);}}
+@keyframes popIn{0%{transform:scale(0.75);opacity:0;}70%{transform:scale(1.04);}100%{transform:scale(1);opacity:1;}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════
+   STATE
+═══════════════════════════════════════ */
+const S = {
+  view: 'form',
+  form: { name:'', employeeId:'', businessGroup:'', activityDate:'', distance:'' },
+  errors: {},
+  files: [],
+  submissions: [],
+  lastSub: null,
+  adminUnlocked: false,
+  showAdminLogin: false,
+  adminPw: '',
+  adminError: false,
+  secretClicks: 0,
+  subImages: {},
+  lightboxSrc: null,
+  toast: null,
+  toastTimer: null,
+};
+
+const ADMIN_PW = 'TWAdmin2026';
+const GROUPS = ['Group CEO','Group CFO','Group Human Resources','Group Food Solutions','Group SSI & NBG','Group Starch BU'];
+const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+const THAI_DAYS = ['อา','จ','อ','พ','พฤ','ศ','ส'];
+
+/* ═══════════════════════════════════════
+   STORAGE / DB
+═══════════════════════════════════════ */
+function saveLocal() {
+  try { localStorage.setItem('twaim_v1_subs', JSON.stringify(S.submissions)); } catch(e) {}
+}
+function loadLocal() {
+  try { const d = localStorage.getItem('twaim_v1_subs'); if (d) S.submissions = JSON.parse(d); } catch(e) {}
+}
+function openDB() {
+  return new Promise((res,rej) => {
+    const req = indexedDB.open('twaim_evidence_v1', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('files',{keyPath:'id'});
+    req.onsuccess = e => res(e.target.result);
+    req.onerror = () => rej(req.error);
+  });
+}
+async function saveImages(subId, files) {
+  try {
+    const db = await openDB();
+    const tx = db.transaction('files','readwrite');
+    const store = tx.objectStore('files');
+    files.forEach(f => { if(f.data) store.put({id:subId+'_'+f.name,subId,name:f.name,type:f.type||'application/octet-stream',data:f.data}); });
+    await new Promise((res,rej) => { tx.oncomplete=res; tx.onerror=()=>rej(tx.error); });
+  } catch(e) { console.warn(e); }
+}
+async function getAllImages() {
+  try {
+    const db = await openDB();
+    return await new Promise((res,rej) => {
+      const tx = db.transaction('files','readonly');
+      const req = tx.objectStore('files').getAll();
+      req.onsuccess = () => res(req.result||[]);
+      req.onerror = () => rej(req.error);
+    });
+  } catch(e) { return []; }
+}
+async function loadAllImages() {
+  const all = await getAllImages();
+  const g = {};
+  all.forEach(img => { if(!g[img.subId]) g[img.subId]=[]; g[img.subId].push({name:img.name,type:img.type,data:img.data}); });
+  S.subImages = g;
+}
+
+/* ═══════════════════════════════════════
+   FILE PROCESSING
+═══════════════════════════════════════ */
+function processFile(file) {
+  return new Promise(resolve => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      if (file.type.startsWith('image/')) {
+        const img = new Image();
+        img.onload = () => {
+          const maxDim = 1400;
+          let w = img.width, h = img.height;
+          if (w>maxDim||h>maxDim) { const r=Math.min(maxDim/w,maxDim/h); w=Math.round(w*r); h=Math.round(h*r); }
+          const canvas = document.createElement('canvas');
+          canvas.width=w; canvas.height=h;
+          canvas.getContext('2d').drawImage(img,0,0,w,h);
+          const compressed = canvas.toDataURL('image/jpeg',0.80);
+          resolve({name:file.name,size:file.size,type:'image/jpeg',data:compressed,preview:compressed});
+        };
+        img.onerror = () => resolve({name:file.name,size:file.size,type:file.type,data:dataUrl,preview:dataUrl});
+        img.src = dataUrl;
+      } else {
+        resolve({name:file.name,size:file.size,type:file.type,data:dataUrl,preview:null});
+      }
+    };
+    reader.onerror = () => resolve({name:file.name,size:file.size,type:file.type,data:null,preview:null});
+    reader.readAsDataURL(file);
+  });
+}
+function fmtSize(b) {
+  if(!b) return ''; if(b<1024) return b+' B'; if(b<1048576) return (b/1024).toFixed(0)+' KB'; return (b/1048576).toFixed(1)+' MB';
+}
+
+/* ═══════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════ */
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function fmtDate(ts) {
+  try { return new Date(ts).toLocaleString('th-TH',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}); } catch(e) { return '-'; }
+}
+function activityLabel(sub) {
+  if (sub.activityDate) {
+    try { const d=new Date(sub.activityDate+'T00:00:00'); return d.getDate()+' ก.ค. 2569'; } catch(e) { return sub.activityDate; }
+  }
+  return sub.round==='round1'?'Round 1':'Round 2';
+}
+function getTotals() {
+  const raw = S.submissions.reduce((s,r)=>s+parseFloat(r.distance||0),0);
+  const thb = Math.round(raw*10);
+  const pct = Math.min((thb/100000)*100,100);
+  return { km:raw.toFixed(1), thb:thb.toLocaleString('th-TH'), pct, label:pct.toFixed(1)+'%' };
+}
+function getGroupStats() {
+  const stats = GROUPS.map(name => {
+    const subs = S.submissions.filter(s=>s.businessGroup===name);
+    const km = subs.reduce((sum,s)=>sum+parseFloat(s.distance||0),0);
+    return {name,km,thb:Math.round(km*10),count:subs.length};
+  });
+  const maxKm = Math.max(...stats.map(g=>g.km),1);
+  return stats.map(g=>({...g,pct:(g.km/maxKm*100).toFixed(1)}));
+}
+function getDailyStats() {
+  const stats=[];
+  for(let dd=3;dd<=13;dd++){
+    const dateStr='2026-07-'+String(dd).padStart(2,'0');
+    const subs=S.submissions.filter(s=>s.activityDate===dateStr);
+    const km=subs.reduce((a,s)=>a+parseFloat(s.distance||0),0);
+    const d=new Date(2026,6,dd);
+    stats.push({day:dd,km,thb:Math.round(km*10),count:subs.length,label:THAI_DAYS[d.getDay()]+' '+dd+' ก.ค.'});
+  }
+  const maxKm=Math.max(...stats.map(d=>d.km),1);
+  return stats.map(d=>({...d,pct:(d.km/maxKm*100).toFixed(1)}));
+}
+function readFormFromDOM() {
+  const n=document.getElementById('f-name'),e=document.getElementById('f-empid'),g=document.getElementById('f-group'),d=document.getElementById('f-dist');
+  if(n) S.form.name=n.value; if(e) S.form.employeeId=e.value; if(g) S.form.businessGroup=g.value; if(d) S.form.distance=d.value;
+}
+
+/* ═══════════════════════════════════════
+   TOAST
+═══════════════════════════════════════ */
+function showToast(msg) {
+  clearTimeout(S.toastTimer);
+  S.toast=msg; renderToast();
+  S.toastTimer=setTimeout(()=>{S.toast=null;renderToast();},3500);
+}
+function renderToast() {
+  const el=document.getElementById('toast'); if(!el) return;
+  el.textContent=S.toast||''; el.style.display=S.toast?'block':'none';
+}
+
+/* ═══════════════════════════════════════
+   CALENDAR
+═══════════════════════════════════════ */
+function buildCalendar() {
+  const calStart=new Date(2026,5,29);
+  const chStart=new Date(2026,6,3);
+  const chEnd=new Date(2026,6,13);
+  let cells='';
+  for(let ci=0;ci<21;ci++){
+    const cd=new Date(calStart.getTime());
+    cd.setDate(calStart.getDate()+ci);
+    const dateStr=cd.getFullYear()+'-'+String(cd.getMonth()+1).padStart(2,'0')+'-'+String(cd.getDate()).padStart(2,'0');
+    const ok=cd>=chStart&&cd<=chEnd;
+    const sel=S.form.activityDate===dateStr;
+    const wknd=ci%7>=5;
+    let sty='display:flex;align-items:center;justify-content:center;height:34px;border-radius:8px;';
+    if(!ok) sty+='font-size:13px;color:#D1D5DB;cursor:default;user-select:none;';
+    else if(sel) sty+='font-size:14px;font-weight:800;background:linear-gradient(135deg,#0A2D6B,#1565C0);color:#fff;cursor:pointer;user-select:none;box-shadow:0 2px 8px rgba(21,101,192,0.35);';
+    else sty+='font-size:14px;font-weight:700;color:'+(wknd?'#EF4444':'#1F2937')+';cursor:pointer;background:#F0F7FF;user-select:none;';
+    cells+=`<div style="${sty}" ${ok?`data-cal-date="${dateStr}"`:''}>${cd.getDate()}</div>`;
+  }
+  const selD=S.form.activityDate?new Date(S.form.activityDate+'T00:00:00'):null;
+  const selLabel=selD?selD.getDate()+' '+THAI_MONTHS[selD.getMonth()]+' '+(selD.getFullYear()+543):'';
+  return `<div style="background:#fff;border:1.5px solid #E5E7EB;border-radius:12px;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#0A2D6B,#1565C0);padding:10px 14px;display:flex;align-items:center;justify-content:space-between;">
+      <div style="color:#fff;font-weight:800;font-size:14px;">กรกฎาคม 2569</div>
+      <div style="color:rgba(255,255,255,0.75);font-size:11px;">3–13 ก.ค. เท่านั้น</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);padding:8px 8px 2px;gap:2px;background:#F8FAFF;">
+      ${['จ','อ','พ','พฤ','ศ','ส','อา'].map((d,i)=>`<div style="text-align:center;font-size:11px;font-weight:700;color:${i>=4?'#EF4444':'#6B7280'};padding:5px 0;">${d}</div>`).join('')}
+    </div>
+    <div id="cal-grid" style="display:grid;grid-template-columns:repeat(7,1fr);padding:4px 8px 10px;gap:3px;">${cells}</div>
+  </div>
+  ${selLabel?`<div style="margin-top:8px;padding:8px 13px;background:#EEF4FF;border-radius:9px;font-size:13px;color:#1565C0;font-weight:600;">📅 เลือกวันที่: ${selLabel}</div>`:''}
+  ${S.errors.activityDate?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.activityDate)}</div>`:''}`;
+}
+
+/* ═══════════════════════════════════════
+   FILE LIST
+═══════════════════════════════════════ */
+function buildFileList() {
+  if(!S.files.length) return '';
+  return `<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;">
+    ${S.files.map((f,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:#F0F7FF;border:1px solid #BFDBFE;border-radius:9px;">
+      ${f.preview?`<div style="width:36px;height:36px;background-image:url('${f.preview}');background-size:cover;background-position:center;border-radius:6px;flex-shrink:0;"></div>`:'<span style="font-size:20px;flex-shrink:0;">📄</span>'}
+      <span style="flex:1;font-size:13px;color:#1F2937;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.name)}</span>
+      <span style="font-size:11px;color:#9CA3AF;flex-shrink:0;">${fmtSize(f.size)}</span>
+      <button data-remove="${i}" style="background:none;border:none;color:#F87171;cursor:pointer;font-size:18px;line-height:1;padding:0;flex-shrink:0;font-weight:700;">×</button>
+    </div>`).join('')}
+  </div>`;
+}
+
+/* ═══════════════════════════════════════
+   PROGRESS BAR
+═══════════════════════════════════════ */
+function progressBar(pct, h, bg) {
+  return `<div style="background:${bg};border-radius:6px;height:${h};overflow:hidden;"><div style="width:${pct.toFixed(1)}%;height:100%;background:linear-gradient(90deg,#42A5F5,#FFD54F);border-radius:6px;min-width:${pct>0?'6px':'0'};transition:width 1.2s ease;"></div></div>`;
+}
+
+/* ═══════════════════════════════════════
+   VIEWS
+═══════════════════════════════════════ */
+const inBase = 'width:100%;padding:11px 14px;border:1.5px solid #CBD5E0;border-radius:10px;font-size:15px;color:#1F2937;outline:none;background:#fff;';
+const inErr  = 'width:100%;padding:11px 14px;border:1.5px solid #F87171;border-radius:10px;font-size:15px;color:#1F2937;outline:none;background:#FFF5F5;';
+function iS(f) { return S.errors[f]?inErr:inBase; }
+
+function buildHeader() {
+  const activeTab = (S.view==='thankyou')?'form':S.view;
+  const tabs = [{v:'form',l:'📝 ส่งผล'},{v:'dashboard',l:'📊 Dashboard'},{v:'admin',l:'🔐 Admin'}];
+  const tabHTML = tabs.map(t=>{
+    const act=activeTab===t.v;
+    const s=act?'flex:1;padding:13px 10px;border:none;border-bottom:3px solid #1565C0;cursor:pointer;font-weight:700;font-size:14px;color:#1565C0;background:#EEF4FF;text-align:center;white-space:nowrap;font-family:Sarabun,sans-serif;'
+                :'flex:1;padding:13px 10px;border:none;border-bottom:3px solid transparent;cursor:pointer;font-weight:700;font-size:14px;color:#6B7280;background:#fff;text-align:center;white-space:nowrap;font-family:Sarabun,sans-serif;';
+    return `<button data-nav="${t.v}" style="${s}">${t.l}</button>`;
+  }).join('');
+  return `<header style="background:linear-gradient(135deg,#0A2D6B 0%,#1565C0 100%);position:sticky;top:0;z-index:100;box-shadow:0 2px 16px rgba(10,45,107,0.35);">
+    <div style="max-width:640px;margin:0 auto;padding:0 16px;display:flex;align-items:center;height:52px;">
+      <div id="secret-btn" style="cursor:pointer;display:flex;align-items:center;gap:10px;flex:1;min-width:0;">
+        <div style="width:32px;height:32px;background:rgba(255,255,255,0.15);border:2px solid rgba(255,255,255,0.3);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;">🏃</div>
+        <div style="min-width:0;">
+          <div style="color:#fff;font-weight:800;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Thai Wah Moves for Good Challenge</div>
+          <div style="color:rgba(255,255,255,0.6);font-size:11px;">3–13 July 2026</div>
+        </div>
+      </div>
+    </div>
+  </header>
+  <img src="uploads/pasted-1782871617202-0.png" style="width:100%;max-height:220px;display:block;object-fit:contain;background:#fff;" onerror="this.style.display='none'">
+  <div style="background:#fff;border-bottom:2px solid #EEF4FF;position:sticky;top:52px;z-index:90;box-shadow:0 2px 10px rgba(10,45,107,0.08);">
+    <div style="max-width:640px;margin:0 auto;display:flex;">${tabHTML}</div>
+  </div>`;
+}
+
+function buildFormView() {
+  const t=getTotals();
+  const donPrev=Math.round(parseFloat(S.form.distance||0)*10).toLocaleString('th-TH');
+  const showDon=!!(S.form.distance&&parseFloat(S.form.distance)>0);
+  return `<div style="animation:fadeUp 0.4s ease both;">
+    <div style="background:#fff;border-radius:14px;padding:16px 18px;margin-bottom:20px;box-shadow:0 2px 14px rgba(10,45,107,0.08);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+        <div style="display:flex;gap:18px;align-items:center;">
+          <div><div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">KM สะสม</div><div style="font-size:24px;font-weight:800;color:#0A2D6B;line-height:1;">${t.km}</div></div>
+          <div style="width:1px;height:36px;background:#EEF4FF;"></div>
+          <div><div style="font-size:10px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">ทุนบริจาค</div><div style="font-size:24px;font-weight:800;color:#1565C0;line-height:1;">฿${t.thb}</div></div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;">
+          <div style="font-size:10px;color:#9CA3AF;font-weight:600;margin-bottom:2px;">เป้าหมาย ฿100,000</div>
+          <div style="font-size:22px;font-weight:800;color:#0A2D6B;">${t.label}</div>
+        </div>
+      </div>
+      ${progressBar(t.pct,'8px','#EEF4FF')}
+      <div style="font-size:11px;color:#9CA3AF;margin-top:6px;">ทุก 1 KM = Thai Wah สมทบ 10 บาท · เป้าหมายสูงสุด ฿100,000</div>
+    </div>
+    <div style="background:#fff;border-radius:18px;padding:24px;box-shadow:0 2px 24px rgba(10,45,107,0.08);">
+      <div style="font-size:17px;font-weight:800;color:#0A2D6B;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid #EEF4FF;">📋 Submit Your Miles</div>
+
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">ชื่อ - นามสกุล <span style="color:#EF4444;">*</span></label>
+        <input id="f-name" type="text" value="${esc(S.form.name)}" placeholder="กรอกชื่อ-นามสกุลของคุณ" style="${iS('name')}">
+        ${S.errors.name?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.name)}</div>`:''}
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">รหัสพนักงาน <span style="color:#EF4444;">*</span></label>
+        <input id="f-empid" type="text" value="${esc(S.form.employeeId)}" placeholder="เช่น EMP-00123" style="${iS('employeeId')}">
+        ${S.errors.employeeId?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.employeeId)}</div>`:''}
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">Business Group <span style="color:#EF4444;">*</span></label>
+        <select id="f-group" style="${iS('businessGroup')}">
+          <option value="">— Select Group —</option>
+          ${GROUPS.map(g=>`<option value="${esc(g)}" ${S.form.businessGroup===g?'selected':''}>${esc(g)}</option>`).join('')}
+        </select>
+        ${S.errors.businessGroup?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.businessGroup)}</div>`:''}
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:8px;">วันที่ออกกำลังกาย <span style="color:#EF4444;">*</span></label>
+        ${buildCalendar()}
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">Distance (KM) ผลรวมทั้งหมด <span style="color:#EF4444;">*</span></label>
+        <div style="position:relative;">
+          <input id="f-dist" type="number" min="0" step="0.1" value="${esc(S.form.distance)}" placeholder="0.0" style="${iS('distance')}padding-right:50px;">
+          <span style="position:absolute;right:14px;top:50%;transform:translateY(-50%);font-size:13px;font-weight:700;color:#6B7280;pointer-events:none;">KM</span>
+        </div>
+        ${S.errors.distance?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.distance)}</div>`:''}
+        <div id="donation-preview-wrap">${showDon?`<div style="margin-top:8px;padding:9px 13px;background:#EEF4FF;border-radius:9px;font-size:13px;color:#1565C0;font-weight:600;">💙 Thai Wah จะสมทบ <strong>${donPrev} บาท</strong> จากระยะทางนี้</div>`:''}</div>
+      </div>
+
+      <div style="margin-bottom:22px;">
+        <label style="display:block;font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">Upload Screenshot <span style="color:#EF4444;">*</span> <span style="font-weight:400;color:#9CA3AF;">(สูงสุด 3 ไฟล์)</span></label>
+        <input type="file" id="file-input" multiple accept="image/jpeg,image/png,image/gif,application/pdf" style="display:none;">
+        <div id="drop-zone" style="border:2px dashed #CBD5E0;border-radius:12px;padding:28px 20px;text-align:center;cursor:pointer;background:#F9FAFB;transition:all 0.2s;">
+          <div style="font-size:30px;margin-bottom:8px;">📎</div>
+          <div style="font-weight:700;font-size:14px;color:#1565C0;">ลากไฟล์หรือเลือกไฟล์</div>
+          <div style="font-size:12px;color:#6B7280;margin-top:4px;">รองรับ JPG, PNG, PDF · รูปจะถูกบีบอัดอัตโนมัติ</div>
+        </div>
+        <div id="file-list">${buildFileList()}</div>
+        ${S.errors.files?`<div style="color:#EF4444;font-size:12px;margin-top:5px;">⚠ ${esc(S.errors.files)}</div>`:''}
+      </div>
+
+      <button id="btn-submit" style="width:100%;padding:15px;background:linear-gradient(135deg,#0A2D6B,#1565C0);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:0.3px;box-shadow:0 4px 16px rgba(21,101,192,0.4);">✅ ส่งผล Submit Miles</button>
+    </div>
+  </div>`;
+}
+
+function buildThankyouView() {
+  const sub=S.lastSub; if(!sub) return '';
+  const km=parseFloat(sub.distance).toFixed(1);
+  const thb=Math.round(parseFloat(sub.distance)*10).toLocaleString('th-TH');
+  return `<div style="animation:fadeUp 0.4s ease both;text-align:center;padding:16px 0;">
+    <div style="animation:popIn 0.55s ease both;width:96px;height:96px;background:linear-gradient(135deg,#0A2D6B,#1565C0);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:46px;margin:0 auto 22px;">✅</div>
+    <div style="font-size:26px;font-weight:800;color:#0A2D6B;margin-bottom:6px;">Submission Received!</div>
+    <div style="font-size:15px;color:#1565C0;font-weight:600;margin-bottom:4px;">ขอบคุณที่ร่วมเป็นส่วนหนึ่งของ Thai Wah Moves for Good</div>
+    <div style="font-size:14px;color:#6B7280;margin-bottom:28px;">คุณส่งผลสำเร็จแล้ว 🎉</div>
+    <div style="display:flex;gap:14px;margin-bottom:20px;">
+      <div style="flex:1;background:#fff;border-radius:16px;padding:20px 16px;box-shadow:0 2px 16px rgba(10,45,107,0.07);">
+        <div style="font-size:30px;margin-bottom:8px;">🏃</div>
+        <div style="font-size:11px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Distance Submitted</div>
+        <div style="font-size:32px;font-weight:800;color:#0A2D6B;line-height:1;">${km}</div>
+        <div style="font-size:14px;color:#6B7280;margin-top:2px;">Kilometers</div>
+      </div>
+      <div style="flex:1;background:linear-gradient(135deg,#0A2D6B,#1565C0);border-radius:16px;padding:20px 16px;color:#fff;">
+        <div style="font-size:30px;margin-bottom:8px;">💙</div>
+        <div style="font-size:11px;opacity:0.7;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Donation Impact</div>
+        <div style="font-size:28px;font-weight:800;line-height:1;">฿${thb}</div>
+        <div style="font-size:13px;opacity:0.7;margin-top:2px;">Thai Wah สมทบ</div>
+      </div>
+    </div>
+    <div style="background:#fff;border-radius:16px;padding:18px 20px;box-shadow:0 2px 16px rgba(10,45,107,0.07);text-align:left;margin-bottom:22px;">
+      <div style="font-weight:700;color:#0A2D6B;margin-bottom:12px;font-size:14px;">รายละเอียดการส่ง</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;justify-content:space-between;font-size:14px;padding-bottom:10px;border-bottom:1px solid #EEF4FF;"><span style="color:#6B7280;">Business Group</span><span style="font-weight:700;color:#1F2937;">${esc(sub.businessGroup)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;"><span style="color:#6B7280;">วันที่ออกกำลังกาย</span><span style="font-weight:700;color:#1F2937;">${esc(activityLabel(sub))}</span></div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <button data-nav="dashboard" style="width:100%;padding:14px;background:linear-gradient(135deg,#0A2D6B,#1565C0);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;box-shadow:0 4px 16px rgba(21,101,192,0.35);">📊 View Live Dashboard</button>
+      <button id="btn-another" style="width:100%;padding:13px;background:#EEF4FF;color:#1565C0;border:2px solid #93C5FD;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">➕ ส่งผลเพิ่มเติม</button>
+    </div>
+  </div>`;
+}
+
+function buildDashboardView() {
+  const t=getTotals(); const gs=getGroupStats(); const ds=getDailyStats();
+  const maxDay=Math.max(...ds.map(d=>d.km),1);
+  return `<div style="animation:fadeUp 0.4s ease both;">
+    <div style="background:linear-gradient(135deg,#0A2D6B,#1565C0);border-radius:18px;padding:22px 20px;margin-bottom:20px;color:#fff;">
+      <div style="font-size:17px;font-weight:800;margin-bottom:18px;">🏆 Live Dashboard</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
+        <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Total KM</div><div style="font-size:22px;font-weight:800;line-height:1;">${t.km}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">kilometers</div></div>
+        <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">ทุนบริจาค</div><div style="font-size:22px;font-weight:800;line-height:1;">฿${t.thb}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">บาท</div></div>
+        <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">ผู้ร่วม</div><div style="font-size:22px;font-weight:800;line-height:1;">${S.submissions.length}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">คน</div></div>
+      </div>
+      <div style="background:rgba(255,255,255,0.1);border-radius:12px;padding:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;"><span>เป้าหมายทุนบริจาค ฿100,000</span><span style="font-weight:800;color:#FFD54F;font-size:16px;">${t.label}</span></div>
+        ${progressBar(t.pct,'12px','rgba(255,255,255,0.18)')}
+        <div style="font-size:11px;opacity:0.55;margin-top:6px;">฿${t.thb} จาก ฿100,000</div>
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:18px;padding:20px;box-shadow:0 2px 24px rgba(10,45,107,0.08);margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:800;color:#0A2D6B;margin-bottom:18px;">🏢 ผลแยกตาม Business Group</div>
+      <div style="display:flex;flex-direction:column;gap:16px;">
+        ${gs.map(g=>`<div>
+          <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px;">
+            <div style="font-size:13px;font-weight:700;color:#1F2937;">${esc(g.name)}</div>
+            <div style="text-align:right;"><div style="font-size:15px;font-weight:800;color:#0A2D6B;">฿${g.thb.toLocaleString('th-TH')}</div><div style="font-size:11px;color:#6B7280;">${g.km.toFixed(1)} KM · ${g.count} คน</div></div>
+          </div>
+          <div style="background:#EEF4FF;border-radius:6px;height:10px;overflow:hidden;"><div style="width:${g.pct}%;height:100%;background:${g.km>0?'linear-gradient(90deg,#1565C0,#42A5F5)':'transparent'};border-radius:6px;min-width:${g.km>0?'8px':'0'};transition:width 0.9s ease;"></div></div>
+        </div>`).join('')}
+      </div>
+    </div>
+
+    <div style="background:#fff;border-radius:18px;padding:20px;box-shadow:0 2px 24px rgba(10,45,107,0.08);">
+      <div style="font-size:16px;font-weight:800;color:#0A2D6B;margin-bottom:4px;">📅 ยอดบริจาครายวัน</div>
+      <div style="font-size:11px;color:#9CA3AF;margin-bottom:14px;">3–13 กรกฎาคม 2569</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        ${ds.map(d=>`<div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <div style="font-size:13px;font-weight:700;color:#374151;min-width:76px;">${d.label}</div>
+            <div style="display:flex;gap:10px;align-items:center;">
+              <div style="font-size:11px;color:#9CA3AF;">${d.km.toFixed(1)} KM · ${d.count} คน</div>
+              <div style="font-size:14px;font-weight:800;color:#0A2D6B;min-width:60px;text-align:right;">฿${d.thb.toLocaleString('th-TH')}</div>
+            </div>
+          </div>
+          <div style="background:#EEF4FF;border-radius:6px;height:8px;overflow:hidden;"><div style="width:${(d.km/maxDay*100).toFixed(1)}%;height:100%;background:${d.km>0?'linear-gradient(90deg,#1565C0,#42A5F5)':'transparent'};border-radius:6px;min-width:${d.km>0?'8px':'0'};transition:width 0.9s ease;"></div></div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildAdminView() {
+  const t=getTotals(); const gs=getGroupStats(); const subs=[...S.submissions].reverse();
+  return `<div style="animation:fadeUp 0.4s ease both;">
+    <div style="background:linear-gradient(135deg,#111827,#0A2D6B);border-radius:18px;padding:20px;margin-bottom:18px;color:#fff;display:flex;align-items:center;justify-content:space-between;">
+      <div><div style="font-size:18px;font-weight:800;margin-bottom:2px;">🔐 Admin Panel</div><div style="font-size:12px;opacity:0.6;">Thai Wah Moves for Good</div></div>
+      <div style="text-align:right;"><div style="font-size:28px;font-weight:800;">${S.submissions.length}</div><div style="font-size:11px;opacity:0.6;">submissions</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 12px rgba(10,45,107,0.06);"><div style="font-size:11px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Total Distance</div><div style="font-size:22px;font-weight:800;color:#0A2D6B;">${t.km} KM</div></div>
+      <div style="background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 12px rgba(10,45,107,0.06);"><div style="font-size:11px;color:#6B7280;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Total Donation</div><div style="font-size:22px;font-weight:800;color:#0A2D6B;">฿${t.thb}</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap;">
+      <button id="btn-zip" style="flex:1;min-width:140px;padding:12px;background:linear-gradient(135deg,#7C3AED,#4F46E5);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;"><span>📦</span> ZIP (Excel + รูป)</button>
+      <button id="btn-excel" style="flex:1;min-width:110px;padding:12px;background:linear-gradient(135deg,#166534,#16A34A);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;"><span>📊</span> Excel</button>
+      <button id="btn-csv" style="padding:12px 14px;background:linear-gradient(135deg,#0A2D6B,#1565C0);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;">📄 CSV</button>
+      <button id="btn-clear" style="padding:12px 14px;background:#FFF5F5;color:#EF4444;border:1.5px solid #FECACA;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">🗑</button>
+    </div>
+    <div style="background:#fff;border-radius:14px;padding:18px;box-shadow:0 2px 16px rgba(10,45,107,0.07);margin-bottom:16px;">
+      <div style="font-weight:800;color:#0A2D6B;margin-bottom:14px;font-size:15px;">สรุปตาม Business Group</div>
+      <div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="background:#EEF4FF;">
+          <th style="text-align:left;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">Group</th>
+          <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">KM</th>
+          <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">บาท</th>
+          <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">คน</th>
+        </tr></thead>
+        <tbody>${gs.map(g=>`<tr style="border-bottom:1px solid #EEF4FF;">
+          <td style="padding:9px 12px;font-weight:600;color:#1F2937;">${esc(g.name)}</td>
+          <td style="padding:9px 12px;text-align:right;color:#374151;">${g.km.toFixed(1)}</td>
+          <td style="padding:9px 12px;text-align:right;font-weight:800;color:#1565C0;">฿${g.thb.toLocaleString('th-TH')}</td>
+          <td style="padding:9px 12px;text-align:right;color:#6B7280;">${g.count}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    <div style="background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 2px 16px rgba(10,45,107,0.07);">
+      <div style="padding:16px 18px;border-bottom:2px solid #EEF4FF;display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-weight:800;color:#0A2D6B;font-size:15px;">รายการส่งทั้งหมด</div>
+        <div style="font-size:13px;color:#6B7280;">${S.submissions.length} รายการ</div>
+      </div>
+      ${S.submissions.length===0?`<div style="text-align:center;padding:40px;color:#9CA3AF;"><div style="font-size:36px;margin-bottom:10px;">📭</div><div style="font-size:14px;">ยังไม่มีข้อมูลการส่ง</div></div>`
+      :`<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;min-width:700px;">
+        <thead><tr style="background:#F9FAFB;">
+          <th style="text-align:left;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;white-space:nowrap;">วันที่-เวลา</th>
+          <th style="text-align:left;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">ชื่อ</th>
+          <th style="text-align:left;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">รหัส</th>
+          <th style="text-align:left;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">Group</th>
+          <th style="text-align:left;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">วันที่</th>
+          <th style="text-align:right;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">KM</th>
+          <th style="text-align:right;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">THB</th>
+          <th style="text-align:center;padding:10px 12px;font-weight:700;color:#374151;font-size:10px;text-transform:uppercase;">รูป</th>
+        </tr></thead>
+        <tbody>${subs.map((s,i)=>{
+          const imgs=(S.subImages[s.id]||[]).filter(img=>img.data&&img.type&&img.type.startsWith('image/'));
+          return `<tr style="border-bottom:1px solid #EEF4FF;background:${i%2===0?'#fff':'#F9FBFF'}">
+            <td style="padding:10px 12px;color:#6B7280;white-space:nowrap;">${fmtDate(s.timestamp)}</td>
+            <td style="padding:10px 12px;font-weight:700;color:#1F2937;white-space:nowrap;">${esc(s.name)}</td>
+            <td style="padding:10px 12px;color:#6B7280;">${esc(s.employeeId||'-')}</td>
+            <td style="padding:10px 12px;color:#374151;font-size:11px;">${esc(s.businessGroup)}</td>
+            <td style="padding:10px 12px;color:#6B7280;white-space:nowrap;">${esc(activityLabel(s))}</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:700;color:#0A2D6B;">${parseFloat(s.distance).toFixed(1)}</td>
+            <td style="padding:10px 12px;text-align:right;font-weight:800;color:#1565C0;">฿${Math.round(parseFloat(s.distance)*10).toLocaleString('th-TH')}</td>
+            <td style="padding:10px 12px;">
+              <div style="display:flex;gap:4px;align-items:center;justify-content:center;flex-wrap:wrap;">
+                ${imgs.map(img=>`<div data-lb="${esc(img.data)}" style="width:38px;height:38px;background-image:url('${img.data}');background-size:cover;background-position:center;border-radius:6px;cursor:pointer;border:1.5px solid #E5E7EB;flex-shrink:0;" title="${esc(img.name)}"></div>`).join('')}
+                ${imgs.length===0?`<span style="font-size:11px;color:#9CA3AF;">${Array.isArray(s.files)?s.files.length:0} ไฟล์</span>`:''}
+              </div>
+            </td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table></div>`}
+    </div>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════
+   MODALS
+═══════════════════════════════════════ */
+function buildAdminModal() {
+  if(!S.showAdminLogin) return '';
+  return `<div id="admin-overlay" style="position:fixed;inset:0;background:rgba(10,45,107,0.55);display:flex;align-items:center;justify-content:center;z-index:500;backdrop-filter:blur(5px);">
+    <div style="background:#fff;border-radius:20px;padding:32px;width:320px;box-shadow:0 24px 64px rgba(10,45,107,0.3);animation:popIn 0.3s ease both;">
+      <div style="text-align:center;margin-bottom:24px;"><div style="font-size:40px;margin-bottom:8px;">🔐</div><div style="font-size:18px;font-weight:800;color:#0A2D6B;">Admin Access</div><div style="font-size:13px;color:#6B7280;margin-top:4px;">กรอก Password เพื่อเข้าถึง Admin Panel</div></div>
+      <input id="admin-pw" type="password" placeholder="Password" style="width:100%;padding:12px 14px;border:1.5px solid ${S.adminError?'#F87171':'#CBD5E0'};border-radius:10px;font-size:15px;outline:none;margin-bottom:12px;font-family:Sarabun,sans-serif;">
+      ${S.adminError?'<div style="color:#EF4444;font-size:13px;text-align:center;margin-bottom:12px;">❌ Password ไม่ถูกต้อง</div>':''}
+      <div style="display:flex;gap:10px;">
+        <button id="btn-admin-cancel" style="flex:1;padding:12px;background:#F3F4F6;color:#374151;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">ยกเลิก</button>
+        <button id="btn-admin-ok" style="flex:1;padding:12px;background:linear-gradient(135deg,#0A2D6B,#1565C0);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;">Unlock</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildLightbox() {
+  if(!S.lightboxSrc) return '';
+  return `<div id="lb-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;z-index:600;cursor:zoom-out;">
+    <img src="${esc(S.lightboxSrc)}" style="max-width:92vw;max-height:88vh;object-fit:contain;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,0.5);">
+    <button id="btn-lb-close" style="position:absolute;top:18px;right:18px;background:rgba(255,255,255,0.18);border:none;color:#fff;font-size:26px;cursor:pointer;width:44px;height:44px;border-radius:50%;font-weight:700;line-height:1;">×</button>
+  </div>`;
+}
+
+/* ═══════════════════════════════════════
+   MAIN RENDER
+═══════════════════════════════════════ */
+function render() {
+  const v=S.view;
+  let content='';
+  if(v==='form') content=buildFormView();
+  else if(v==='thankyou') content=buildThankyouView();
+  else if(v==='dashboard') content=buildDashboardView();
+  else if(v==='admin') content=buildAdminView();
+
+  document.getElementById('root').innerHTML=`
+    <div style="min-height:100vh;background:#EEF4FF;padding-bottom:80px;">
+      ${buildHeader()}
+      <div style="max-width:600px;margin:0 auto;padding:24px 16px;">${content}</div>
+      <div style="text-align:center;padding:20px 16px 32px;color:#9CA3AF;font-size:11px;">
+        Thai Wah Moves for Good Challenge © 2026
+        <span id="secret-footer" style="cursor:pointer;opacity:0.12;margin-left:6px;user-select:none;font-size:9px;">⚙</span>
+      </div>
+    </div>
+    ${buildAdminModal()}
+    ${buildLightbox()}
+    <div id="toast" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:12px 24px;border-radius:10px;font-size:14px;font-weight:600;z-index:999;white-space:nowrap;box-shadow:0 4px 24px rgba(0,0,0,0.25);"></div>
+  `;
+  attachListeners();
+}
+
+/* ═══════════════════════════════════════
+   EVENT LISTENERS
+═══════════════════════════════════════ */
+function attachListeners() {
+  // Nav
+  document.querySelectorAll('[data-nav]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const v=btn.dataset.nav;
+      if(v==='admin') {
+        if(S.adminUnlocked) { S.view='admin'; loadAllImages().then(render); }
+        else { S.showAdminLogin=true; render(); }
+      } else { S.view=v; render(); }
+    });
+  });
+
+  // Secret
+  const sb=document.getElementById('secret-btn');
+  if(sb) sb.addEventListener('click',()=>{ S.secretClicks++; if(S.secretClicks>=5){S.secretClicks=0;S.showAdminLogin=true;render();} });
+  const sf=document.getElementById('secret-footer');
+  if(sf) sf.addEventListener('click',()=>{S.showAdminLogin=true;render();});
+
+  // Form inputs (live update state without re-render)
+  const fn=document.getElementById('f-name');
+  if(fn) fn.addEventListener('input',e=>{S.form.name=e.target.value;if(S.errors.name)delete S.errors.name;});
+  const fe=document.getElementById('f-empid');
+  if(fe) fe.addEventListener('input',e=>{S.form.employeeId=e.target.value;});
+  const fg=document.getElementById('f-group');
+  if(fg) fg.addEventListener('change',e=>{S.form.businessGroup=e.target.value;if(S.errors.businessGroup)delete S.errors.businessGroup;});
+  const fd=document.getElementById('f-dist');
+  if(fd) fd.addEventListener('input',e=>{
+    S.form.distance=e.target.value;
+    if(S.errors.distance)delete S.errors.distance;
+    const val=parseFloat(e.target.value)||0;
+    const w=document.getElementById('donation-preview-wrap');
+    if(w) w.innerHTML=val>0?`<div style="margin-top:8px;padding:9px 13px;background:#EEF4FF;border-radius:9px;font-size:13px;color:#1565C0;font-weight:600;">💙 Thai Wah จะสมทบ <strong>${Math.round(val*10).toLocaleString('th-TH')} บาท</strong> จากระยะทางนี้</div>`:'';
+  });
+
+  // Calendar
+  const cg=document.getElementById('cal-grid');
+  if(cg) cg.addEventListener('click',e=>{
+    const cell=e.target.closest('[data-cal-date]'); if(!cell) return;
+    readFormFromDOM();
+    S.form.activityDate=cell.dataset.calDate;
+    if(S.errors.activityDate)delete S.errors.activityDate;
+    render();
+  });
+
+  // File drop zone
+  const dz=document.getElementById('drop-zone');
+  const fi=document.getElementById('file-input');
+  if(dz){
+    dz.addEventListener('click',()=>fi&&fi.click());
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.style.background='#EEF4FF';dz.style.borderColor='#1565C0';});
+    dz.addEventListener('dragleave',()=>{dz.style.background='#F9FAFB';dz.style.borderColor='#CBD5E0';});
+    dz.addEventListener('drop',e=>{e.preventDefault();dz.style.background='#F9FAFB';dz.style.borderColor='#CBD5E0';addFiles(Array.from(e.dataTransfer.files));});
+  }
+  if(fi) fi.addEventListener('change',e=>{addFiles(Array.from(e.target.files));e.target.value='';});
+  attachRemoveListeners();
+
+  // Submit / thankyou
+  const bs=document.getElementById('btn-submit'); if(bs) bs.addEventListener('click',handleSubmit);
+  const ba=document.getElementById('btn-another');
+  if(ba) ba.addEventListener('click',()=>{S.view='form';S.form={name:'',employeeId:'',businessGroup:'',activityDate:'',distance:''};S.files=[];S.errors={};render();});
+
+  // Admin modal
+  const ap=document.getElementById('admin-pw');
+  if(ap){
+    ap.focus();
+    ap.addEventListener('input',e=>{S.adminPw=e.target.value;S.adminError=false;});
+    ap.addEventListener('keydown',e=>{if(e.key==='Enter')tryAdminLogin();});
+  }
+  const ao=document.getElementById('btn-admin-ok'); if(ao) ao.addEventListener('click',tryAdminLogin);
+  const ac=document.getElementById('btn-admin-cancel');
+  if(ac) ac.addEventListener('click',()=>{S.showAdminLogin=false;S.adminPw='';S.adminError=false;render();});
+  const aov=document.getElementById('admin-overlay');
+  if(aov) aov.addEventListener('click',e=>{if(e.target===aov){S.showAdminLogin=false;render();}});
+
+  // Admin actions
+  const bz=document.getElementById('btn-zip'); if(bz) bz.addEventListener('click',exportZip);
+  const bx=document.getElementById('btn-excel'); if(bx) bx.addEventListener('click',exportExcel);
+  const bc=document.getElementById('btn-csv'); if(bc) bc.addEventListener('click',exportCsv);
+  const bclr=document.getElementById('btn-clear');
+  if(bclr) bclr.addEventListener('click',()=>{
+    if(confirm('ลบข้อมูลทั้งหมด? การกระทำนี้ไม่สามารถย้อนกลับได้')){
+      localStorage.removeItem('twaim_v1_subs');
+      S.submissions=[];S.lastSub=null;S.subImages={};render();showToast('ลบข้อมูลทั้งหมดสำเร็จ');
+    }
+  });
+
+  // Lightbox
+  document.querySelectorAll('[data-lb]').forEach(el=>el.addEventListener('click',()=>{S.lightboxSrc=el.dataset.lb;render();}));
+  const lb=document.getElementById('lb-overlay');
+  if(lb) lb.addEventListener('click',e=>{if(e.target===lb||e.target.id==='btn-lb-close'){S.lightboxSrc=null;render();}});
+}
+
+function attachRemoveListeners() {
+  document.querySelectorAll('[data-remove]').forEach(btn=>{
+    btn.addEventListener('click',e=>{
+      e.stopPropagation();
+      S.files.splice(parseInt(btn.dataset.remove),1);
+      const fl=document.getElementById('file-list');
+      if(fl){fl.innerHTML=buildFileList();attachRemoveListeners();}
+    });
+  });
+}
+
+async function addFiles(rawFiles) {
+  const slots=3-S.files.length; if(slots<=0||!rawFiles.length) return;
+  const processed=await Promise.all(rawFiles.slice(0,slots).map(processFile));
+  S.files=[...S.files,...processed].slice(0,3);
+  if(S.errors.files)delete S.errors.files;
+  const fl=document.getElementById('file-list');
+  if(fl){fl.innerHTML=buildFileList();attachRemoveListeners();}
+}
+
+/* ═══════════════════════════════════════
+   VALIDATION & SUBMIT
+═══════════════════════════════════════ */
+function validate() {
+  const e={};
+  if(!S.form.name.trim()) e.name='กรุณากรอกชื่อ-นามสกุล';
+  if(!S.form.employeeId.trim()) e.employeeId='กรุณากรอกรหัสพนักงาน';
+  if(!S.form.businessGroup) e.businessGroup='กรุณาเลือก Business Group';
+  if(!S.form.activityDate) e.activityDate='กรุณาเลือกวันที่ออกกำลังกาย';
+  const d=parseFloat(S.form.distance);
+  if(!S.form.distance||isNaN(d)||d<=0) e.distance='กรุณากรอกระยะทางที่ถูกต้อง (มากกว่า 0)';
+  if(S.files.length===0) e.files='กรุณาอัปโหลดหลักฐานอย่างน้อย 1 ไฟล์';
+  return e;
+}
+
+async function handleSubmit() {
+  readFormFromDOM();
+  const errs=validate();
+  if(Object.keys(errs).length>0){S.errors=errs;render();return;}
+  const subId=Date.now();
+  const sub={id:subId,timestamp:new Date().toISOString(),name:S.form.name,employeeId:S.form.employeeId,businessGroup:S.form.businessGroup,activityDate:S.form.activityDate,distance:S.form.distance,files:S.files.map(f=>f.name)};
+  S.submissions.push(sub);
+  saveLocal();
+  if(S.files.length>0) await saveImages(subId,S.files);
+  S.lastSub=sub;
+  S.view='thankyou';
+  S.form={name:'',employeeId:'',businessGroup:'',activityDate:'',distance:''};
+  S.files=[]; S.errors={};
+  render();
+}
+
+function tryAdminLogin() {
+  const inp=document.getElementById('admin-pw'); if(inp) S.adminPw=inp.value;
+  if(S.adminPw===ADMIN_PW){
+    S.adminUnlocked=true;S.showAdminLogin=false;S.view='admin';S.adminError=false;S.adminPw='';
+    loadAllImages().then(render);
+  } else { S.adminError=true; render(); }
+}
+
+/* ═══════════════════════════════════════
+   EXPORTS
+═══════════════════════════════════════ */
+function buildWorkbook() {
+  const XLSX=window.XLSX; const wb=XLSX.utils.book_new();
+  const now=new Date().toLocaleString('th-TH',{timeZone:'Asia/Bangkok'});
+  const rawKm=S.submissions.reduce((s,r)=>s+parseFloat(r.distance||0),0);
+  const rawThb=Math.round(rawKm*10);
+  const groupRows=GROUPS.map(name=>{
+    const gs=S.submissions.filter(s=>s.businessGroup===name);
+    const km=parseFloat(gs.reduce((sum,s)=>sum+parseFloat(s.distance||0),0).toFixed(1));
+    return [name,km,Math.round(km*10),gs.length];
+  });
+  groupRows.push(['รวมทั้งหมด',parseFloat(rawKm.toFixed(1)),rawThb,S.submissions.length]);
+  const ws1=XLSX.utils.aoa_to_sheet([['Thai Wah Moves for Good Challenge — สรุปผลตาม Business Group'],['สร้างเมื่อ: '+now],[],['Business Group','KM สะสม','เงินบริจาค (THB)','จำนวนผู้ส่ง (คน)'],...groupRows,[],['เป้าหมายทุนบริจาค','',100000,''],['คืบหน้า (%)','',(Math.min((rawThb/100000)*100,100)).toFixed(1),'']]);
+  ws1['!cols']=[{wch:32},{wch:12},{wch:20},{wch:18}];
+  XLSX.utils.book_append_sheet(wb,ws1,'สรุปตาม Group');
+  const rows=S.submissions.map(s=>[
+    (()=>{try{return new Date(s.timestamp).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'});}catch(e){return s.timestamp;}})(),
+    s.name,s.employeeId||'-',s.businessGroup,
+    s.activityDate||(s.round==='round1'?'Round 1 (3-6 Jul 2026)':'Round 2 (7-9 Jul 2026)'),
+    parseFloat(parseFloat(s.distance).toFixed(1)),Math.round(parseFloat(s.distance)*10),
+    Array.isArray(s.files)?s.files.join(' | '):(s.files||'-')
+  ]);
+  const ws2=XLSX.utils.aoa_to_sheet([['Thai Wah Moves for Good Challenge — รายการส่งทั้งหมด'],['สร้างเมื่อ: '+now],[],['วันที่-เวลา','ชื่อ-นามสกุล','รหัสพนักงาน','Business Group','วันที่ออกกำลังกาย','ระยะทาง (KM)','เงินบริจาค (THB)','ชื่อไฟล์หลักฐาน'],...rows]);
+  ws2['!cols']=[{wch:22},{wch:26},{wch:14},{wch:26},{wch:22},{wch:14},{wch:18},{wch:45}];
+  XLSX.utils.book_append_sheet(wb,ws2,'รายการทั้งหมด');
+  return wb;
+}
+
+function exportExcel() {
+  if(!window.XLSX){showToast('กำลังโหลด SheetJS กรุณาลองใหม่');return;}
+  window.XLSX.writeFile(buildWorkbook(),'ThaiWah_Moves_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  showToast('ดาวน์โหลด Excel สำเร็จ ✓');
+}
+
+async function exportZip() {
+  if(!window.XLSX||!window.JSZip){showToast('กำลังโหลด library กรุณาลองใหม่');return;}
+  showToast('⏳ กำลังสร้างไฟล์ ZIP...');
+  try {
+    const zip=new window.JSZip();
+    zip.file('ThaiWah_Moves_Report.xlsx',window.XLSX.write(buildWorkbook(),{bookType:'xlsx',type:'array'}));
+    const allImgs=await getAllImages();
+    const folder=zip.folder('หลักฐาน_Evidence');
+    for(const sub of S.submissions){
+      const imgs=allImgs.filter(img=>img.subId===sub.id);
+      if(imgs.length>0){
+        const sf=folder.folder(sub.id+'_'+(sub.name||'noname').replace(/[/\\?%*:|"<>]/g,'-'));
+        imgs.forEach(img=>{if(img.data&&img.data.includes(',')){const b64=img.data.split(',')[1];const ext=img.type==='image/jpeg'?'.jpg':img.type==='image/png'?'.png':img.type==='image/gif'?'.gif':'';sf.file(img.name.includes('.')?img.name:(img.name+ext),b64,{base64:true});}});
+      }
+    }
+    const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=url;a.download='ThaiWah_Evidence_'+new Date().toISOString().slice(0,10)+'.zip';a.click();
+    URL.revokeObjectURL(url);
+    showToast('ดาวน์โหลด ZIP สำเร็จ ✓');
+  } catch(err){console.error(err);showToast('เกิดข้อผิดพลาด กรุณาลองใหม่');}
+}
+
+function exportCsv() {
+  const headers=['วันที่-เวลา','ชื่อ-นามสกุล','รหัสพนักงาน','Business Group','วันที่ออกกำลังกาย','ระยะทาง (KM)','เงินบริจาค (THB)','ไฟล์แนบ'];
+  const rows=S.submissions.map(s=>[(()=>{try{return new Date(s.timestamp).toLocaleString('th-TH',{timeZone:'Asia/Bangkok'});}catch(e){return s.timestamp;}})(),s.name,s.employeeId||'-',s.businessGroup,s.activityDate||(s.round==='round1'?'Round 1':'Round 2'),parseFloat(s.distance).toFixed(1),Math.round(parseFloat(s.distance)*10),Array.isArray(s.files)?s.files.join(' | '):(s.files||'-')]);
+  const csv=[headers,...rows].map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='ThaiWah_Moves_'+new Date().toISOString().slice(0,10)+'.csv';a.click();
+  URL.revokeObjectURL(url);
+  showToast('ดาวน์โหลด CSV สำเร็จ ✓');
+}
+
+/* ═══════════════════════════════════════
+   INIT
+═══════════════════════════════════════ */
+loadLocal();
+render();
+</script>
+</body>
+</html>
