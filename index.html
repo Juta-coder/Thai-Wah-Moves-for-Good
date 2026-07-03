@@ -56,7 +56,6 @@ const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzhVj7kCV64KTXQ
 // ══════════════════════════════════════════════════════════
 const GROUPS = ['Group CEO','Group CFO','Group Human Resources','Group Food Solutions','Group SSI & NBG','Group Starch BU'];
 const THAI_MONTHS = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
-const THAI_DAYS = ['อา','จ','อ','พ','พฤ','ศ','ส'];
 
 /* ═══════════════════════════════════════
    STORAGE / DB
@@ -76,10 +75,11 @@ async function sheetsGet(params) {
   return r.json();
 }
 async function sheetsPost(data) {
-  // ใช้ text/plain เพื่อหลีกเลี่ยง CORS preflight ของ Apps Script
+  // Content-Type ต้องเป็น text/plain เพื่อเลี่ยง CORS preflight (OPTIONS)
+  // ซึ่ง Google Apps Script Web App ไม่รองรับ — Apps Script ฝั่ง server
+  // ยังคง JSON.parse(e.postData.contents) ได้ตามปกติ
   const r = await fetch(APPS_SCRIPT_URL, {
-    method: 'POST',
-    body: JSON.stringify(data),
+    method: 'POST', body: JSON.stringify(data),
     headers: {'Content-Type': 'text/plain;charset=utf-8'}
   });
   if (!r.ok) throw new Error('Sheets POST ' + r.status);
@@ -200,18 +200,6 @@ function getGroupStats() {
   });
   const maxKm = Math.max(...stats.map(g=>g.km),1);
   return stats.map(g=>({...g,pct:(g.km/maxKm*100).toFixed(1)}));
-}
-function getDailyStats() {
-  const stats=[];
-  for(let dd=3;dd<=13;dd++){
-    const dateStr='2026-07-'+String(dd).padStart(2,'0');
-    const subs=S.submissions.filter(s=>s.activityDate===dateStr);
-    const km=subs.reduce((a,s)=>a+parseFloat(s.distance||0),0);
-    const d=new Date(2026,6,dd);
-    stats.push({day:dd,km,thb:Math.round(km*10),count:subs.length,label:THAI_DAYS[d.getDay()]+' '+dd+' ก.ค.'});
-  }
-  const maxKm=Math.max(...stats.map(d=>d.km),1);
-  return stats.map(d=>({...d,pct:(d.km/maxKm*100).toFixed(1)}));
 }
 function readFormFromDOM() {
   const n=document.getElementById('f-name'),e=document.getElementById('f-empid'),g=document.getElementById('f-group'),d=document.getElementById('f-dist');
@@ -431,14 +419,10 @@ function buildThankyouView() {
 }
 
 function buildDashboardView() {
-  const t=getTotals(); const gs=getGroupStats(); const ds=getDailyStats();
-  const maxDay=Math.max(...ds.map(d=>d.km),1);
+  const t=getTotals(); const gs=getGroupStats();
   return `<div style="animation:fadeUp 0.4s ease both;">
     <div style="background:linear-gradient(135deg,#0A2D6B,#1565C0);border-radius:18px;padding:22px 20px;margin-bottom:20px;color:#fff;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
-        <div style="font-size:17px;font-weight:800;">🏆 Live Dashboard</div>
-        <button id="btn-sync" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:Sarabun,sans-serif;">🔄 Sync</button>
-      </div>
+      <div style="font-size:17px;font-weight:800;margin-bottom:18px;">🏆 Live Dashboard</div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
         <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Total KM</div><div style="font-size:22px;font-weight:800;line-height:1;">${t.km}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">kilometers</div></div>
         <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">ทุนบริจาค</div><div style="font-size:22px;font-weight:800;line-height:1;">฿${t.thb}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">บาท</div></div>
@@ -459,23 +443,6 @@ function buildDashboardView() {
         </div>`).join('')}
       </div>
     </div>
-
-    <div style="background:#fff;border-radius:18px;padding:20px;box-shadow:0 2px 24px rgba(10,45,107,0.08);">
-      <div style="font-size:16px;font-weight:800;color:#0A2D6B;margin-bottom:4px;">📅 ยอดบริจาครายวัน</div>
-      <div style="font-size:11px;color:#9CA3AF;margin-bottom:14px;">3–13 กรกฎาคม 2569</div>
-      <div style="display:flex;flex-direction:column;gap:10px;">
-        ${ds.map(d=>`<div>
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <div style="font-size:13px;font-weight:700;color:#374151;min-width:76px;">${d.label}</div>
-            <div style="display:flex;gap:10px;align-items:center;">
-              <div style="font-size:11px;color:#9CA3AF;">${d.km.toFixed(1)} KM · ${d.count} คน</div>
-              <div style="font-size:14px;font-weight:800;color:#0A2D6B;min-width:60px;text-align:right;">฿${d.thb.toLocaleString('th-TH')}</div>
-            </div>
-          </div>
-          <div style="background:#EEF4FF;border-radius:6px;height:8px;overflow:hidden;"><div style="width:${(d.km/maxDay*100).toFixed(1)}%;height:100%;background:${d.km>0?'linear-gradient(90deg,#1565C0,#42A5F5)':'transparent'};border-radius:6px;min-width:${d.km>0?'8px':'0'};transition:width 0.9s ease;"></div></div>
-        </div>`).join('')}
-      </div>
-    </div>
   </div>`;
 }
 
@@ -483,7 +450,7 @@ function buildAdminView() {
   const t=getTotals(); const gs=getGroupStats(); const subs=[...S.submissions].reverse();
   return `<div style="animation:fadeUp 0.4s ease both;">
     <div style="background:linear-gradient(135deg,#111827,#0A2D6B);border-radius:18px;padding:20px;margin-bottom:18px;color:#fff;display:flex;align-items:center;justify-content:space-between;">
-      <div><div style="font-size:18px;font-weight:800;margin-bottom:2px;">🔐 Admin Panel</div><div style="font-size:12px;opacity:0.6;">Thai Wah Moves for Good ${APPS_SCRIPT_URL?'<span style="color:#86EFAC;">● Sheets เชื่อมต่อแล้ว</span>':'<span style="color:#FCA5A5;">● ยังไม่ได้ตั้งค่า Sheets</span>'}</div></div>
+      <div><div style="font-size:18px;font-weight:800;margin-bottom:2px;">🔐 Admin Panel</div><div style="font-size:12px;opacity:0.6;">Thai Wah Moves for Good</div></div>
       <div style="text-align:right;"><div style="font-size:28px;font-weight:800;">${S.submissions.length}</div><div style="font-size:11px;opacity:0.6;">submissions</div></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
@@ -689,20 +656,11 @@ function attachListeners() {
   const bz=document.getElementById('btn-zip'); if(bz) bz.addEventListener('click',exportZip);
   const bx=document.getElementById('btn-excel'); if(bx) bx.addEventListener('click',exportExcel);
   const bc=document.getElementById('btn-csv'); if(bc) bc.addEventListener('click',exportCsv);
-
-  // Sync button (dashboard)
-  const bsync=document.getElementById('btn-sync');
-  if(bsync) bsync.addEventListener('click',async()=>{
-    bsync.textContent='⏳ กำลัง sync...'; bsync.disabled=true;
-    const ok=await syncFromSheets(true);
-    if(ok){render();showToast('Sync สำเร็จ ✓');}
-    else{bsync.textContent='🔄 Sync';bsync.disabled=false;showToast('⚠ Sync ไม่สำเร็จ ตรวจสอบ APPS_SCRIPT_URL');}
-  });
   const bclr=document.getElementById('btn-clear');
   if(bclr) bclr.addEventListener('click',async()=>{
     if(confirm('ลบข้อมูลทั้งหมด? การกระทำนี้ไม่สามารถย้อนกลับได้')){
       localStorage.removeItem('twaim_v1_subs');
-      if(APPS_SCRIPT_URL){try{await sheetsGet({action:'deleteAll'});}catch(e){console.warn('Sheets clear failed',e);}}
+      if(APPS_SCRIPT_URL){try{await sheetsGet({action:'deleteAll', token:ADMIN_PW});}catch(e){console.warn('Sheets clear failed',e);}}
       S.submissions=[];S.lastSub=null;S.subImages={};render();showToast('ลบข้อมูลทั้งหมดสำเร็จ');
     }
   });
