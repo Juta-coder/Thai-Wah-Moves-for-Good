@@ -426,7 +426,7 @@ function buildDashboardView() {
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
         <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Total KM</div><div style="font-size:22px;font-weight:800;line-height:1;">${t.km}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">kilometers</div></div>
         <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">ทุนบริจาค</div><div style="font-size:22px;font-weight:800;line-height:1;">฿${t.thb}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">บาท</div></div>
-        <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">ผู้ร่วม</div><div style="font-size:22px;font-weight:800;line-height:1;">${S.submissions.length}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">คน</div></div>
+        <div style="background:rgba(255,255,255,0.12);border-radius:12px;padding:14px 10px;text-align:center;"><div style="font-size:10px;opacity:0.65;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">จำนวนครั้ง</div><div style="font-size:22px;font-weight:800;line-height:1;">${S.submissions.length}</div><div style="font-size:10px;opacity:0.55;margin-top:3px;">ครั้ง</div></div>
       </div>
 
     </div>
@@ -437,7 +437,7 @@ function buildDashboardView() {
         ${gs.map(g=>`<div>
           <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px;">
             <div style="font-size:13px;font-weight:700;color:#1F2937;">${esc(g.name)}</div>
-            <div style="text-align:right;"><div style="font-size:15px;font-weight:800;color:#0A2D6B;">฿${g.thb.toLocaleString('th-TH')}</div><div style="font-size:11px;color:#6B7280;">${g.km.toFixed(1)} KM · ${g.count} คน</div></div>
+            <div style="text-align:right;"><div style="font-size:15px;font-weight:800;color:#0A2D6B;">฿${g.thb.toLocaleString('th-TH')}</div><div style="font-size:11px;color:#6B7280;">${g.km.toFixed(1)} KM · ${g.count} ครั้ง</div></div>
           </div>
           <div style="background:#EEF4FF;border-radius:6px;height:10px;overflow:hidden;"><div style="width:${g.pct}%;height:100%;background:${g.km>0?'linear-gradient(90deg,#1565C0,#42A5F5)':'transparent'};border-radius:6px;min-width:${g.km>0?'8px':'0'};transition:width 0.9s ease;"></div></div>
         </div>`).join('')}
@@ -470,7 +470,7 @@ function buildAdminView() {
           <th style="text-align:left;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">Group</th>
           <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">KM</th>
           <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">บาท</th>
-          <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">คน</th>
+          <th style="text-align:right;padding:9px 12px;font-weight:700;color:#374151;font-size:11px;text-transform:uppercase;">ครั้ง</th>
         </tr></thead>
         <tbody>${gs.map(g=>`<tr style="border-bottom:1px solid #EEF4FF;">
           <td style="padding:9px 12px;font-weight:600;color:#1F2937;">${esc(g.name)}</td>
